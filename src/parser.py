@@ -26,6 +26,8 @@ class CellInfo:
     is_formula: bool = False
     row: int = 0
     col: int = 0
+    row_header: Optional[str] = None   # NEW: context from header row (leftmost/topmost)
+    column_header: Optional[str] = None # NEW: context from header column (topmost)
 
 
 @dataclass
@@ -37,6 +39,8 @@ class SheetInfo:
     data_range: Tuple[int, int, int, int]  # (min_row, max_row, min_col, max_col)
     formulas: List[CellInfo]
     values: List[CellInfo]
+    header_rows: List[int] = None       # NEW: keep which rows are header rows
+    header_cols: List[int] = None       # NEW: keep which columns are header columns
 
 
 class SpreadsheetParser:
@@ -85,14 +89,16 @@ class SpreadsheetParser:
         raise NotImplementedError("Google Sheets integration not yet implemented")
     
     def _parse_sheet(self, sheet_name: str) -> SheetInfo:
-        """Parse a single sheet and extract all relevant information"""
+        """Parse a single sheet and extract all relevant information (+ headers row/col context)"""
         sheet = self.workbook[sheet_name]
         
         cells = []
         headers = []
         formulas = []
         values = []
-        
+        header_rows = set()
+        header_cols = set()
+
         # Get the used range
         if sheet.max_row == 1 and sheet.max_column == 1 and sheet.cell(1, 1).value is None:
             # Empty sheet
@@ -102,39 +108,65 @@ class SpreadsheetParser:
                 headers=[],
                 data_range=(1, 1, 1, 1),
                 formulas=[],
-                values=[]
+                values=[],
+                header_rows=[],
+                header_cols=[]
             )
         
         min_row, max_row = 1, sheet.max_row
         min_col, max_col = 1, sheet.max_column
-        
-        # Parse all cells
-        for row in range(min_row, max_row + 1):
+
+        # First pass: gather row headers/top headers for fast lookup
+        row_header_map = dict()  # col idx -> header str for each row
+        col_header_map = dict()  # row idx -> header str for each col
+        # Collect header rows and columns
+        for row in range(min_row, min(min_row+4, max_row+1)):
             for col in range(min_col, max_col + 1):
                 cell = sheet.cell(row, col)
-                
+                if cell.value and isinstance(cell.value, str) and len(cell.value.strip()) > 0 and self._is_likely_header(cell.value, row, col, sheet):
+                    row_header_map[col] = cell.value.strip()
+                    header_rows.add(row)
+                    header_cols.add(col)
+        for col in range(min_col, min(min_col+4, max_col+1)):
+            for row in range(min_row, max_row + 1):
+                cell = sheet.cell(row, col)
+                if cell.value and isinstance(cell.value, str) and len(cell.value.strip()) > 0 and self._is_likely_header(cell.value, row, col, sheet):
+                    col_header_map[row] = cell.value.strip()
+                    header_rows.add(row)
+                    header_cols.add(col)
+
+        # Second pass: annotate each cell with header context
+        for row in range(min_row, max_row + 1):
+            active_row_header = row_header_map.get(1)  # leftmost
+            for col in range(min_col, max_col + 1):
+                cell = sheet.cell(row, col)
                 if cell.value is not None:
+                    # Determine header context
+                    row_header = row_header_map.get(col)
+                    column_header = col_header_map.get(row)
                     cell_info = self._create_cell_info(sheet_name, cell, row, col)
+                    # Annotate with context
+                    cell_info.row_header = row_header
+                    cell_info.column_header = column_header
                     cells.append(cell_info)
-                    
                     if cell_info.is_formula:
                         formulas.append(cell_info)
                     else:
                         values.append(cell_info)
-                    
-                    # Identify headers (usually in first few rows)
                     if row <= 3 and isinstance(cell.value, str) and len(cell.value.strip()) > 0:
                         if self._is_likely_header(cell.value, row, col, sheet):
                             cell_info.is_header = True
                             headers.append(cell.value.strip())
-        
+
         return SheetInfo(
             name=sheet_name,
             cells=cells,
             headers=headers,
             data_range=(min_row, max_row, min_col, max_col),
             formulas=formulas,
-            values=values
+            values=values,
+            header_rows=sorted(list(header_rows)),
+            header_cols=sorted(list(header_cols))
         )
     
     def _create_cell_info(self, sheet_name: str, cell, row: int, col: int) -> CellInfo:

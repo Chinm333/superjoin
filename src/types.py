@@ -38,3 +38,7 @@ class FormulaType(Enum):
     LOOKUP = "lookup"
     CALCULATION = "calculation"
     COMPARISON = "comparison"
+
+
+
+

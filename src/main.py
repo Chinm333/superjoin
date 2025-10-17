@@ -13,12 +13,14 @@ try:
     from .semantic_engine import SemanticEngine, SemanticInfo
     from .query_processor import QueryProcessor, QueryIntent
     from .ranking import ResultRanker, ResultFormatter, SearchResult, ResultFormat
+    from .answer_generator import AnswerGenerator
     from .config import Config
 except ImportError:
     from parser import SpreadsheetParser, SheetInfo
     from semantic_engine import SemanticEngine, SemanticInfo
     from query_processor import QueryProcessor, QueryIntent
     from ranking import ResultRanker, ResultFormatter, SearchResult, ResultFormat
+    from answer_generator import AnswerGenerator
     from config import Config
 
 
@@ -39,11 +41,13 @@ class SemanticSpreadsheetSearch:
         self.query_processor = QueryProcessor()
         self.ranker = ResultRanker()
         self.formatter = ResultFormatter()
+        self.answer_generator = AnswerGenerator()
         
         # Share the Gemini service instance across all components
         self.semantic_engine.gemini_service = self.shared_gemini_service
         self.query_processor.gemini_service = self.shared_gemini_service
         self.ranker.gemini_service = self.shared_gemini_service
+        self.answer_generator.gemini_service = self.shared_gemini_service
         
         self.loaded_sheets: Dict[str, SheetInfo] = {}
         self.semantic_cache: Dict[str, List[SemanticInfo]] = {}
@@ -55,14 +59,14 @@ class SemanticSpreadsheetSearch:
         """Show the status of AI integrations"""
         
         print("\n" + "="*60)
-        print("🚀 SEMANTIC SPREADSHEET SEARCH ENGINE")
+        print("SEMANTIC SPREADSHEET SEARCH ENGINE")
         print("="*60)
         
         if Config.USE_GEMINI:
-            print("🧠 Gemini AI: ENABLED - Enhanced semantic understanding")
+            print("Gemini AI: ENABLED - Enhanced semantic understanding")
         else:
-            print("📋 Gemini AI: DISABLED - Using rule-based analysis")
-            print("   💡 Run 'python setup_gemini.py' to enable AI features")
+            print("Gemini AI: DISABLED - Using rule-based analysis")
+            print("   Run 'python setup_gemini.py' to enable AI features")
         
         print("="*60)
     
@@ -160,6 +164,60 @@ class SemanticSpreadsheetSearch:
         )
         
         return self.formatter.format_results(search_results, query_intent, format_type)
+    
+    def search_with_answer(self, query: str, sheet_name: Optional[str] = None, 
+                          format_type: ResultFormat = ResultFormat.HUMAN_READABLE,
+                          max_results: int = 20, include_answer: bool = True) -> str:
+        """
+        Perform semantic search and generate direct answers
+        
+        Args:
+            query: Natural language search query
+            sheet_name: Optional specific sheet to search (searches all if None)
+            format_type: Output format for results
+            max_results: Maximum number of results to return
+            include_answer: Whether to include direct answer generation
+            
+        Returns:
+            Formatted search results with direct answer
+        """
+        start_time = time.time()
+        
+        # Validate query
+        is_valid, validation_message = self.query_processor.validate_query(query)
+        if not is_valid:
+            return f"Invalid query: {validation_message}"
+        
+        # Process the query
+        query_intent = self.query_processor.process_query(query)
+        
+        # Get semantic results to search
+        semantic_results = self._get_semantic_results(sheet_name)
+        
+        if not semantic_results:
+            return "No spreadsheet data loaded. Please load a spreadsheet first."
+        
+        # Rank the results
+        search_results = self.ranker.rank_results(semantic_results, query_intent)
+        
+        # Limit results
+        search_results = search_results[:max_results]
+        
+        # Format search results
+        search_time = time.time() - start_time
+        search_output = self.formatter.format_results(search_results, query_intent, format_type)
+        
+        # Generate direct answer if requested
+        if include_answer and search_results:
+            try:
+                answer = self.answer_generator.generate_answer(search_results, query_intent)
+                if answer and answer.strip():
+                    return f"{search_output}\n\n{answer}"
+            except Exception as e:
+                print(f"Answer generation failed: {e}")
+                # Return just the search results if answer generation fails
+        
+        return search_output
     
     def _get_semantic_results(self, sheet_name: Optional[str] = None) -> List[SemanticInfo]:
         """Get semantic results for search"""
@@ -509,7 +567,7 @@ def handle_suggest_command(search_engine):
         print("💡 No suggestions available. Load an Excel file first.")
 
 
-def handle_search_query(search_engine, query, format_type, max_results):
+def handle_search_query(search_engine, query, format_type, max_results, use_answer_generator=True):
     """Handle natural language search queries"""
     if not search_engine.list_loaded_sheets():
         print("❌ No files loaded. Please load an Excel file first using 'load <file_path>'")
@@ -519,7 +577,11 @@ def handle_search_query(search_engine, query, format_type, max_results):
     print("⏳ Processing...")
     
     try:
-        results = search_engine.search(query, format_type=format_type, max_results=max_results)
+        # Use the new search_with_answer method for enhanced results
+        if use_answer_generator:
+            results = search_engine.search_with_answer(query, format_type=format_type, max_results=max_results)
+        else:
+            results = search_engine.search(query, format_type=format_type, max_results=max_results)
         
         if results and results.strip():
             print(f"\n🤖 Results:")

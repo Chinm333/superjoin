@@ -69,9 +69,9 @@ class ResultRanker:
         self.use_gemini = Config.USE_GEMINI and self.gemini_service.is_available
         
         if self.use_gemini:
-            print("🎯 Enhanced result ranking with Gemini AI")
+            print("Enhanced result ranking with Gemini AI")
         else:
-            print("📊 Using rule-based result ranking")
+            print("Using rule-based result ranking")
     
     def rank_results(self, semantic_results: List[SemanticInfo], 
                     query_intent: QueryIntent) -> List[SearchResult]:
@@ -162,12 +162,21 @@ class ResultRanker:
         return 0.0
     
     def _calculate_context_importance(self, semantic_info: SemanticInfo) -> float:
-        """Calculate the importance of the cell based on its context"""
+        """Boost context importance for key business formulas (margin, profit, growth, variance, etc.)"""
         score = 0.0
-        if semantic_info.cell_info.is_header:
+        # Boost for core business concepts from semantic engine:
+        key_archetype = False
+        if semantic_info.business_concepts:
+            for concept in semantic_info.business_concepts:
+                if concept in [BusinessConcept.MARGIN, BusinessConcept.PROFIT, BusinessConcept.GROWTH, BusinessConcept.VARIANCE, BusinessConcept.RATIO, BusinessConcept.REVENUE, BusinessConcept.COST]:
+                    key_archetype = True
+                    break
+        if key_archetype and semantic_info.cell_info.is_formula:
+            score += 0.8    # High importance to key business formulas
+        elif semantic_info.cell_info.is_formula:
             score += 0.4
-        if semantic_info.cell_info.is_formula:
-            score += 0.3
+        elif semantic_info.cell_info.is_header:
+            score += 0.2
         score += semantic_info.confidence_score * 0.3
         return min(score, 1.0)
     
@@ -288,31 +297,28 @@ class ResultRanker:
             if "429" in error_msg or "quota" in error_msg.lower():
                 if hasattr(self.gemini_service, 'quota_exceeded'):
                     self.gemini_service.quota_exceeded = True
-                print(f"⚠️  Gemini quota exceeded during explanation generation. Using rule-based explanations.")
+                print(f"Warning: Gemini quota exceeded during explanation generation. Using rule-based explanations.")
             else:
                 print(f"Gemini explanation generation failed: {e}")
             return None
     
-    def _generate_rule_based_explanation(self, semantic_info: SemanticInfo, 
-                                       query_intent: QueryIntent, 
-                                       ranking_factors: Dict[str, float]) -> str:
-        """Fallback rule-based explanation generation"""
+    def _generate_rule_based_explanation(self, semantic_info: SemanticInfo, query_intent: QueryIntent, ranking_factors: Dict[str, float]) -> str:
+        """Show business/semantic engine explanation first, then generic match factors."""
         explanation_parts = []
+        # Show detailed business meaning from engine
+        if getattr(semantic_info, "explanation", None):
+            explanation_parts.append(semantic_info.explanation)
         if ranking_factors.get("concept_match", 0) > 0.5:
             explanation_parts.append("Strong concept match")
         elif ranking_factors.get("concept_match", 0) > 0.2:
             explanation_parts.append("Partial concept match")
-
         if ranking_factors.get("formula_type_match", 0) > 0.5:
             explanation_parts.append("Formula type matches query")
-
         if ranking_factors.get("confidence_score", 0) > 0.7:
             explanation_parts.append("High confidence semantic analysis")
-
         if ranking_factors.get("context_importance", 0) > 0.6:
-            explanation_parts.append("Important context (header/key area)")
-        
-        return "; ".join(explanation_parts) if explanation_parts else "General relevance match"
+            explanation_parts.append("Important calculation context (business formula block)")
+        return "; ".join(str(s) for s in explanation_parts if s) or "General relevance match"
 
 
 class ResultFormatter:

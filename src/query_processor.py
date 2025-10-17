@@ -56,9 +56,9 @@ class QueryProcessor:
         self.use_gemini = Config.USE_GEMINI and self.gemini_service.is_available
         
         if self.use_gemini:
-            print("💬 Enhanced query processor with Gemini AI")
+            print("Enhanced query processor with Gemini AI")
         else:
-            print("📝 Using rule-based query processor")
+            print("Using rule-based query processor")
     
     def _load_query_patterns(self) -> Dict[QueryType, List[str]]:
         """Load patterns for different types of queries"""
@@ -147,7 +147,7 @@ class QueryProcessor:
                 # Mark quota as exceeded to prevent future calls
                 if hasattr(self.gemini_service, 'quota_exceeded'):
                     self.gemini_service.quota_exceeded = True
-                print(f"⚠️  Gemini quota exceeded during query processing. Using rule-based processing.")
+                print(f"Warning: Gemini quota exceeded during query processing. Using rule-based processing.")
             else:
                 print(f"Gemini query processing failed: {e}")
             return None

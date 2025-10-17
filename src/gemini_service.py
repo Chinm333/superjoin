@@ -54,9 +54,9 @@ class GeminiService:
             genai.configure(api_key=Config.GEMINI_API_KEY)
             self.model = genai.GenerativeModel(Config.GEMINI_MODEL)
             self.is_available = True
-            print("✅ Gemini AI initialized successfully")
+            print("Gemini AI initialized successfully")
         except Exception as e:
-            print(f"❌ Failed to initialize Gemini: {e}")
+            print(f"Failed to initialize Gemini: {e}")
             self.is_available = False
     
     def analyze_cell_semantics(self, cell_info: CellInfo, sheet_context: Dict[str, Any]) -> Optional[GeminiAnalysis]:
@@ -97,8 +97,8 @@ class GeminiService:
             error_msg = str(e)
             if "429" in error_msg or "quota" in error_msg.lower():
                 self.quota_exceeded = True
-                print(f"⚠️  Gemini quota exceeded for cell {cell_info.cell_address}. Switching to rule-based analysis for remaining cells.")
-                print(f"📊 Total Gemini requests made: {self.request_count}")
+                print(f"Warning: Gemini quota exceeded for cell {cell_info.cell_address}. Switching to rule-based analysis for remaining cells.")
+                print(f"Total Gemini requests made: {self.request_count}")
             else:
                 print(f"Gemini analysis failed for cell {cell_info.cell_address}: {e}")
             return None
@@ -397,11 +397,11 @@ Make it clear and business-friendly, avoiding technical jargon.
         # Very conservative batch size for free tier (15 requests per minute limit)
         batch_size = 1 
         
-        print(f"🔄 Processing {len(cells)} cells with Gemini AI (rate-limited for free tier)")
+        print(f"Processing {len(cells)} cells with Gemini AI (rate-limited for free tier)")
         
         for i, cell in enumerate(cells):
             if self.quota_exceeded:
-                print(f"⚠️  Quota exceeded, skipping remaining {len(cells) - i} cells")
+                print(f"Warning: Quota exceeded, skipping remaining {len(cells) - i} cells")
                 results.extend([None] * (len(cells) - i))
                 break
                 

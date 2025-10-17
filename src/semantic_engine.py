@@ -46,9 +46,9 @@ class SemanticEngine:
         self.use_gemini = Config.USE_GEMINI and self.gemini_service.is_available
         
         if self.use_gemini:
-            print("🧠 Enhanced semantic engine with Gemini AI")
+            print("Enhanced semantic engine with Gemini AI")
         else:
-            print("📋 Using rule-based semantic engine")
+            print("Using rule-based semantic engine")
     
     def _load_business_vocabulary(self) -> Dict[BusinessConcept, Dict[str, Any]]:
         """Load business vocabulary and concept mappings"""
@@ -323,33 +323,41 @@ class SemanticEngine:
             return []
     
     def _analyze_with_rules(self, cell_info: CellInfo, sheet_context: SheetInfo) -> SemanticInfo:
-        """Fallback rule-based analysis"""
+        """Enhanced rule-based analysis with header/context-aware semantics"""
         business_concepts = []
         formula_type = None
         confidence_score = 0.0
         context_clues = []
         explanation = ""
-        
-        if cell_info.is_formula and cell_info.formula:
-            formula_type, formula_confidence = self._analyze_formula(cell_info.formula)
-            confidence_score += formula_confidence * 0.4
-        
-        cell_text = str(cell_info.value).lower() if cell_info.value else ""
-        concept_matches = self._match_business_concepts(cell_text)
-        business_concepts.extend(concept_matches)
-        
-        context_analysis = self._analyze_context(cell_info, sheet_context)
-        context_clues.extend(context_analysis["clues"])
-        confidence_score += context_analysis["confidence"] * 0.3
-        
-        header_analysis = self._analyze_headers(cell_info, sheet_context)
-        business_concepts.extend(header_analysis["concepts"])
-        confidence_score += header_analysis["confidence"] * 0.3
-        
-        business_concepts = list(dict.fromkeys(business_concepts))
-        
-        explanation = self._generate_explanation(cell_info, business_concepts, formula_type, context_clues)
-        
+
+        # --- Rich formula semantics (NEW) ---
+        resolved_semantics = self._rich_formula_semantics(cell_info, sheet_context)
+
+        if resolved_semantics:
+            business_concepts.extend(resolved_semantics.get("business_concepts", []))
+            formula_type = resolved_semantics.get("formula_type")
+            confidence_score += resolved_semantics.get("confidence", 0)
+            if "explanation" in resolved_semantics:
+                explanation = resolved_semantics["explanation"]
+            if "context_clues" in resolved_semantics:
+                context_clues += resolved_semantics["context_clues"]
+        else:
+            # fallback to previous logic
+            if cell_info.is_formula and cell_info.formula:
+                formula_type, formula_confidence = self._analyze_formula(cell_info.formula)
+                confidence_score += formula_confidence * 0.4
+            cell_text = str(cell_info.value).lower() if cell_info.value else ""
+            concept_matches = self._match_business_concepts(cell_text)
+            business_concepts.extend(concept_matches)
+            context_analysis = self._analyze_context(cell_info, sheet_context)
+            context_clues.extend(context_analysis["clues"])
+            confidence_score += context_analysis["confidence"] * 0.3
+            header_analysis = self._analyze_headers(cell_info, sheet_context)
+            business_concepts.extend(header_analysis["concepts"])
+            confidence_score += header_analysis["confidence"] * 0.3
+            business_concepts = list(dict.fromkeys(business_concepts))
+            explanation = self._generate_explanation(cell_info, business_concepts, formula_type, context_clues)
+
         return SemanticInfo(
             cell_info=cell_info,
             business_concepts=business_concepts,
@@ -358,6 +366,103 @@ class SemanticEngine:
             context_clues=context_clues,
             explanation=explanation
         )
+
+    def _rich_formula_semantics(self, cell_info: CellInfo, sheet_context: SheetInfo) -> Optional[dict]:
+        """Advanced, header-aware semantic decoding of formulas"""
+        # Only run if we have header context and this is a formula cell
+        if not getattr(cell_info, 'is_formula', False) or not getattr(cell_info, 'formula', None):
+            return None
+        formula = cell_info.formula
+        formula_str = str(formula).upper()
+        source_refs = []
+        try:
+            source_refs = sheet_context.parser.get_formula_dependencies(formula) if hasattr(sheet_context, 'parser') else []
+        except Exception:
+            pass
+        # Find referenced cells, use their headers if available
+        src_headers = []
+        for ref in source_refs:
+            ref_cell = None
+            for c in sheet_context.cells:
+                if c.cell_address.upper() == ref.split('!')[-1].upper():
+                    ref_cell = c
+                    break
+            if ref_cell:
+                if ref_cell.row_header:
+                    src_headers.append(ref_cell.row_header)
+                if ref_cell.column_header:
+                    src_headers.append(ref_cell.column_header)
+        # Heuristics: arithmetic ratios, differences = margin, growth, variance
+        result = {}
+        clues = []
+        expl = []
+        matched = False
+        # Margin: (profit/revenue), (gross/net margin)
+        if ('/' in formula_str or '*100' in formula_str) and any(s for s in src_headers if s and 'profit' in s.lower()) and any(s for s in src_headers if s and 'revenue' in s.lower()):
+            result['business_concepts'] = [BusinessConcept.MARGIN, BusinessConcept.PROFIT]
+            result['formula_type'] = FormulaType.PERCENTAGE
+            result['confidence'] = 0.9
+            clues.append("Header context = margin/profit calculation as profit divided by revenue")
+            expl.append("Calculates margin as profit divided by revenue (header-aware)")
+            matched = True
+        # Growth: (current-prev)/prev
+        elif re.search(r"=\(([^-]+)-([^)]+)\)/([^)]+)", formula_str):
+            result['business_concepts'] = [BusinessConcept.GROWTH]
+            result['formula_type'] = FormulaType.GROWTH_RATE
+            result['confidence'] = 0.9
+            clues.append("Arithmetic pattern matches growth rate; check header for periods")
+            expl.append("Growth rate as (current - previous) / previous")
+            matched = True
+        # Profit: revenue - cost
+        elif '-' in formula_str and any(s for s in src_headers if s and 'revenue' in s.lower()) and any(s for s in src_headers if s and ('cost' in s.lower() or 'expense' in s.lower())):
+            result['business_concepts'] = [BusinessConcept.PROFIT]
+            result['formula_type'] = FormulaType.CALCULATION
+            result['confidence'] = 0.85
+            clues.append("Header context = profit calculation as revenue minus cost/expense")
+            expl.append("Calculates profit (revenue-cost or revenue-expense)")
+            matched = True
+        # Variance: actual - budget
+        elif '-' in formula_str and any(s for s in src_headers if s and 'actual' in s.lower()) and any(s for s in src_headers if s and 'budget' in s.lower()):
+            result['business_concepts'] = [BusinessConcept.VARIANCE]
+            result['formula_type'] = FormulaType.CALCULATION
+            result['confidence'] = 0.85
+            clues.append("Header context = variance calculation as actual minus budget")
+            expl.append("Calculates variance (actual-budget)")
+            matched = True
+        # Conditional (IF): budget/plan versus actual
+        elif formula_str.startswith("=IF"):
+            result['business_concepts'] = [BusinessConcept.VARIANCE, BusinessConcept.BUDGET, BusinessConcept.ACTUAL]
+            result['formula_type'] = FormulaType.CONDITIONAL
+            result['confidence'] = 0.8
+            clues.append("Conditional logic: often checks budget vs actual status")
+            expl.append("Conditional, e.g. IF(Actual > Budget, ...) -> budget-vs-actual comparisons")
+            matched = True
+        # Ratio: x/y with header cues (e.g., ROE, ROA, ROI)
+        elif ('/' in formula_str) and any(s for s in src_headers if s and ('roe' in s.lower() or 'roa' in s.lower() or 'roi' in s.lower())):
+            result['business_concepts'] = [BusinessConcept.RATIO]
+            result['formula_type'] = FormulaType.RATIO
+            result['confidence'] = 0.8
+            clues.append("Header context = ratio (ROE/ROA/ROI/etc.)")
+            expl.append("Calculates ratio with business header context")
+            matched = True
+        # SUM: check if header contains revenue, cost, total
+        elif formula_str.startswith('=SUM') and any(s for s in [cell_info.row_header, cell_info.column_header] if s and (('revenue' in s.lower()) or ('cost' in s.lower()) or ("total" in s.lower()))):
+            if cell_info.row_header and 'revenue' in cell_info.row_header.lower():
+                result['business_concepts'] = [BusinessConcept.REVENUE]
+            elif cell_info.row_header and 'cost' in cell_info.row_header.lower():
+                result['business_concepts'] = [BusinessConcept.COST]
+            else:
+                result['business_concepts'] = []
+            result['formula_type'] = FormulaType.SUM
+            result['confidence'] = 0.75
+            clues.append("SUM with financial header context")
+            expl.append("SUM with business header as context")
+            matched = True
+        if matched:
+            result['context_clues'] = clues
+            result['explanation'] = "; ".join(expl)
+            return result
+        return None
     
     def _convert_gemini_analysis(self, gemini_analysis: GeminiAnalysis, cell_info: CellInfo) -> SemanticInfo:
         """Convert Gemini analysis to SemanticInfo"""
@@ -520,7 +625,7 @@ class SemanticEngine:
             semantic_info = self._analyze_with_rules(cell_info, sheet_info)
             semantic_results.append(semantic_info)
         if gemini_cells and self.use_gemini:
-            print(f"🔍 Analyzing {len(gemini_cells)} cells with Gemini AI (out of {len(sheet_info.cells)} total)")
+            print(f"Analyzing {len(gemini_cells)} cells with Gemini AI (out of {len(sheet_info.cells)} total)")
             sheet_context_dict = {
                 'sheet_name': getattr(sheet_info, 'name', 'Unknown'),
                 'headers': self._get_headers_safe(sheet_info),

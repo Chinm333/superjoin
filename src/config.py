@@ -12,7 +12,7 @@ try:
     
     if env_file.exists():
         load_dotenv(env_file)
-        print(f"✅ Loaded environment from: {env_file}")
+        print(f"Loaded environment from: {env_file}")
     else:
         load_dotenv()
         
